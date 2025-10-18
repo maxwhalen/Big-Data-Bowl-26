@@ -1,0 +1,198 @@
+===============================================================================
+CONNECT TO EC2 FROM CURSOR - STEP BY STEP
+===============================================================================
+
+🎯 GOAL: Edit files directly on your EC2 instance from Cursor IDE
+
+===============================================================================
+STEP 1: TEST SSH CONNECTION (Verify it works)
+===============================================================================
+
+Open your terminal and run:
+  ssh big-data-bowl
+
+You should connect immediately without typing the full command!
+If it works, type 'exit' to disconnect.
+
+===============================================================================
+STEP 2: CONNECT FROM CURSOR
+===============================================================================
+
+METHOD A: Using Cursor's Command Palette (Recommended)
+-------------------------------------------------------
+1. Open Cursor
+2. Press: Cmd+Shift+P (Mac) or Ctrl+Shift+P (Windows/Linux)
+3. Type: "Remote-SSH: Connect to Host"
+4. Select: big-data-bowl
+5. Cursor will connect and reload in a new window
+
+METHOD B: Using SSH Remote Menu
+--------------------------------
+1. Look at the bottom-left corner of Cursor
+2. Click the green/blue remote connection button (><)
+3. Select "Connect to Host"
+4. Choose: big-data-bowl
+
+===============================================================================
+STEP 3: OPEN YOUR PROJECT FOLDER
+===============================================================================
+
+Once connected:
+1. File → Open Folder
+2. Navigate to: /home/ubuntu/
+3. Click OK
+
+Now you can:
+  • Create and edit Python files directly
+  • Run code in the integrated terminal
+  • Use Cursor's AI features on EC2
+  • Access all your data files
+
+===============================================================================
+RECOMMENDED WORKFLOW
+===============================================================================
+
+1. CONNECT TO EC2 FROM CURSOR
+   • Use "Remote-SSH: Connect to Host" → big-data-bowl
+   • Open folder: /home/ubuntu/
+
+2. CREATE PROJECT STRUCTURE
+   mkdir -p ~/big-data-bowl/{scripts,notebooks,data,output}
+   
+3. UPLOAD YOUR DATA (from your Mac terminal):
+   scp -r /Users/maxwhalen/Documents/GitHub/Big-Data-Bowl-26/data big-data-bowl:~/big-data-bowl/
+
+4. CREATE AND EDIT PYTHON SCRIPTS
+   • Write your analysis code in .py files
+   • Use Cursor's AI to help write code
+   • Run scripts in the integrated terminal
+
+5. USE JUPYTER FOR INTERACTIVE WORK (Optional)
+   • Keep Jupyter running for quick explorations
+   • Main development in Cursor with .py files
+   • Access Jupyter at: http://13.56.165.161:8888
+
+===============================================================================
+USEFUL CURSOR COMMANDS (When Connected to EC2)
+===============================================================================
+
+Run Python file:
+  • Right-click file → "Run Python File in Terminal"
+  • Or use terminal: python3 your_script.py
+
+Install packages:
+  • Terminal: pip3 install --break-system-packages package-name
+
+Open integrated terminal:
+  • Terminal → New Terminal (or Ctrl+`)
+  • This terminal runs on your EC2 instance!
+
+Git operations:
+  • Works normally - you can commit/push from EC2
+  • Set up git config first:
+    git config --global user.name "Your Name"
+    git config --global user.email "your@email.com"
+
+===============================================================================
+EXAMPLE DEVELOPMENT SESSION
+===============================================================================
+
+1. Connect from Cursor to big-data-bowl
+2. Create new file: analysis.py
+3. Write code with Cursor's AI assistance:
+
+   import pandas as pd
+   import numpy as np
+   
+   # Load data
+   df = pd.read_csv('big-data-bowl/data/train/input_2023_w01.csv')
+   
+   # Your analysis here
+   print(df.describe())
+
+4. Run in terminal: python3 analysis.py
+5. Iterate and develop with full IDE features
+
+===============================================================================
+TRANSFERRING FILES
+===============================================================================
+
+FROM YOUR MAC TO EC2:
+  # Single file
+  scp file.csv big-data-bowl:~/big-data-bowl/data/
+  
+  # Directory
+  scp -r /local/path big-data-bowl:~/big-data-bowl/
+
+FROM EC2 TO YOUR MAC:
+  # Single file
+  scp big-data-bowl:~/results.csv ./
+  
+  # Directory
+  scp -r big-data-bowl:~/output ./local-output/
+
+OR USE CURSOR'S FILE EXPLORER:
+  • Drag and drop files in Cursor's explorer
+  • Right-click → Upload/Download
+
+===============================================================================
+TROUBLESHOOTING
+===============================================================================
+
+ISSUE: "Connection refused" or "Host key verification failed"
+SOLUTION:
+  ssh-keygen -R 13.56.165.161
+  Then reconnect
+
+ISSUE: Cursor can't find the host
+SOLUTION:
+  1. Check SSH config: cat ~/.ssh/config
+  2. Test connection: ssh big-data-bowl
+  3. Make sure instance is running:
+     aws ec2 describe-instances --instance-ids i-0ee7647bb88ef1f71
+
+ISSUE: IP address changed (after stopping/starting instance)
+SOLUTION:
+  1. Get new IP:
+     NEW_IP=$(aws ec2 describe-instances --instance-ids i-0ee7647bb88ef1f71 \
+         --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+  
+  2. Update SSH config:
+     sed -i.bak "s/HostName .*/HostName $NEW_IP/" ~/.ssh/config
+  
+  3. Reconnect from Cursor
+
+ISSUE: Extensions not working
+SOLUTION:
+  • Some Cursor extensions need to be installed on the remote server
+  • Cursor will prompt you - click "Install in SSH: big-data-bowl"
+
+===============================================================================
+ADVANTAGES OF THIS SETUP
+===============================================================================
+
+✅ Full IDE features (autocomplete, linting, debugging)
+✅ Cursor AI works directly with your remote code
+✅ No need to sync files manually
+✅ Run code on powerful EC2 hardware
+✅ Version control integration
+✅ Multiple files/projects at once
+✅ Familiar development environment
+✅ Access to all EC2 resources (RAM, CPU)
+
+===============================================================================
+QUICK REFERENCE
+===============================================================================
+
+Connect:          Cmd+Shift+P → "Remote-SSH: Connect to Host" → big-data-bowl
+Disconnect:       Click bottom-left remote indicator → "Close Remote Connection"
+Terminal:         Ctrl+` (runs on EC2)
+Upload data:      scp -r data big-data-bowl:~/big-data-bowl/
+Test SSH:         ssh big-data-bowl
+Instance ID:      i-0ee7647bb88ef1f71
+Current IP:       13.56.165.161
+
+===============================================================================
+
+You can now develop like you're on a local machine, but with EC2's power! 🚀
+
