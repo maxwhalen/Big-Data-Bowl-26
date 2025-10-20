@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "/home/ubuntu/miniconda3/envs/bigdatabowl/bin/python",
+  "jupyter.notebookFileRoot": "${workspaceFolder}"
+}
