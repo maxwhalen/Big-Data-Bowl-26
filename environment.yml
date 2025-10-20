@@ -1,0 +1,22 @@
+name: bigdatabowl
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - jupyter
+  - ipykernel
+  - scipy
+  - statsmodels
+  - plotly
+  - tqdm
+  - pip
+  - pip:
+    # Add any additional pip packages here if needed
+
+
+
