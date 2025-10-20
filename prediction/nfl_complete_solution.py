@@ -912,6 +912,7 @@ class NFLPredictor:
         # Merge with GNN embeddings
         last_frames = last_frames.merge(gnn_embeddings, on=['game_id', 'play_id', 'nfl_id'], how='left')
         
+        
         # Prepare test data
         test_prepared = test_data.merge(
             last_frames, on=['game_id', 'play_id', 'nfl_id'], how='left'
@@ -921,7 +922,15 @@ class NFLPredictor:
         test_prepared['delta_frames'] = (test_prepared['frame_id'] - test_prepared['last_frame_id']).clip(lower=0)
         test_prepared['delta_t'] = test_prepared['delta_frames'] / 10.0
         
-        # Prepare features
+        # Prepare features - only use available columns
+        available_features = [col for col in self.feature_columns if col in test_prepared.columns]
+        missing_features = [col for col in self.feature_columns if col not in test_prepared.columns]
+        
+        if missing_features:
+            print(f"Warning: {len(missing_features)} features missing from test data, filling with 0")
+            for col in missing_features:
+                test_prepared[col] = 0
+        
         X_test = test_prepared[self.feature_columns].fillna(0).values
         
         # Physics baseline
@@ -1057,7 +1066,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='NFL Big Data Bowl 2026 - Complete Solution')
     parser.add_argument('--dev', action='store_true', help='Run in dev mode with subset of data (faster)')
     parser.add_argument('--testing', action='store_true', help='Run in testing mode with sampled play IDs')
-    parser.add_argument('--sample-fraction', type=float, default=0.05, help='Fraction of play IDs to sample for testing (default: 0.05 = 5%%)')
+    parser.add_argument('--sample', type=float, default=0.05, help='Fraction of play IDs to sample for testing (default: 0.05 = 5%%)')
     parser.add_argument('--prod', action='store_true', help='Run in production mode with full dataset')
     parser.add_argument('--nohup', action='store_true', help='Run with nohup for background execution')
     
@@ -1070,20 +1079,20 @@ if __name__ == "__main__":
         sys.stderr = open('nfl_training_error.log', 'w')
     
     if args.testing:
-        test_testing_mode(args.sample_fraction)
+        test_testing_mode(args.sample)
     elif args.dev:
         test_dev_mode()
     elif args.prod:
         run_production()
     else:
-        print("Usage: python nfl_complete_solution.py [--dev|--testing|--prod] [--sample-fraction FLOAT] [--nohup]")
+        print("Usage: python nfl_complete_solution.py [--dev|--testing|--prod] [--sample FLOAT] [--nohup]")
         print("  --dev              - Run in dev mode with subset of data (faster)")
         print("  --testing          - Run in testing mode with sampled play IDs")
-        print("  --sample-fraction  - Fraction of play IDs to sample (default: 0.05 = 5%%)")
+        print("  --sample  - Fraction of play IDs to sample (default: 0.05 = 5%%)")
         print("  --prod             - Run in production mode with full dataset")
         print("  --nohup            - Run with nohup for background execution")
         print("  no args            - Run in dev mode by default")
         print("\nExamples:")
-        print("  python nfl_complete_solution.py --testing --sample-fraction 0.1")
+        print("  python nfl_complete_solution.py --testing --sample 0.1")
         print("  nohup python nfl_complete_solution.py --testing --nohup &")
         test_dev_mode()
