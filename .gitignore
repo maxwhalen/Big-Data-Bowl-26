@@ -1,4 +1,12 @@
-prediction/__pycache__/
-prediction/catboost_info/
-prediction/venv/
-upgrade_instance.sh
+# Ignore venv, outputs, and large artifacts
+venv/
+*/venv/
+__pycache__/
+*.pyc
+prediction/outputs/
+catboost_info/
+*/catboost_info/
+.DS_Store
+.ipynb_checkpoints/
+.env
+*.log

@@ -83,6 +83,13 @@
 
 ## 🔬 Technical Implementation Details
 
+### Recent updates (Oct 2025)
+- Added device auto-detection for CatBoost (CPU/GPU, multi-GPU via `devices` like '0:1').
+- Ensured test-time feature engineering parity with training; missing engineered columns are filled safely.
+- Introduced role-specific heads (Targeted Receiver / Defensive Coverage) blended with global predictions.
+- Clarified and expanded GNN-lite neighbor embeddings (k=6, radius=30, ally/opponent weighting).
+- Added a Kaggle-style submission notebook: `SampleNotebooks/kaggle_submission_catboost_roleblend.ipynb`.
+
 ### Core Architecture
 ```python
 class NFLPredictor:
@@ -91,6 +98,7 @@ class NFLPredictor:
     - GNNProcessor: Player interaction embeddings
     - PhysicsBaseline: Constant acceleration baseline
     - CatBoost models: Residual learning for x,y coordinates
+    - RoleHeads: TR/DC specialized heads blended with global
 ```
 
 ### Feature Engineering Pipeline
@@ -99,6 +107,7 @@ class NFLPredictor:
 3. **Sequence Features**: 1-5 frame lags, 3-5 window rolling statistics
 4. **Formation Features**: team centroids, relative positions, formation bearing
 5. **GNN Embeddings**: weighted neighbor interactions (6 neighbors, 30-yard radius)
+6. **Inference Parity**: identical pipeline applied at test-time; absent columns defaulted conservatively
 
 ### Neural Network Architecture
 ```python
