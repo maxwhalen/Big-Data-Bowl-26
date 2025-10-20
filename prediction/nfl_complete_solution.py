@@ -40,19 +40,48 @@ warnings.filterwarnings("ignore")
 class NFLConfig:
     """Configuration class for NFL Big Data Bowl 2026"""
     
-    def __init__(self):
+    def __init__(self, dev_mode: bool = False, testing_mode: bool = False, sample_fraction: float = 0.05):
         # Paths
         self.BASE_DIR = Path("/home/ubuntu/Big-Data-Bowl-26/prediction/data")
         self.SAVE_DIR = Path("/home/ubuntu/Big-Data-Bowl-26/prediction/outputs")
         self.SAVE_DIR.mkdir(exist_ok=True)
         
-        # Data specs
-        self.N_WEEKS = 18
+        # Mode settings
+        self.DEV_MODE = dev_mode
+        self.TESTING_MODE = testing_mode
+        self.SAMPLE_FRACTION = sample_fraction
+        
+        if testing_mode:
+            print(f"🧪 TESTING MODE ENABLED - Using {sample_fraction*100:.1f}% of play IDs for fast testing")
+            self.N_WEEKS = 18  # Use all weeks but sample plays
+            self.N_FOLDS = 3  # Reduce CV folds for speed
+            self.ITERATIONS = 1000  # Balanced iterations for testing
+            self.EPOCHS = 10  # Fewer epochs for neural networks
+            self.PATIENCE = 5  # Less patience for early stopping
+            self.DEV_FRACTION = 1.0  # Will be overridden by play sampling
+            self.PLAY_SAMPLE_FRACTION = sample_fraction
+        elif dev_mode:
+            print("🚀 DEV MODE ENABLED - Using subset of data for faster testing")
+            self.N_WEEKS = 2  # Only use 2 weeks for dev
+            self.N_FOLDS = 2  # Reduce CV folds
+            self.ITERATIONS = 100  # Much fewer iterations
+            self.EPOCHS = 5  # Fewer epochs for neural networks
+            self.PATIENCE = 2  # Less patience for early stopping
+            self.DEV_FRACTION = 0.01  # Use only 1% of data
+            self.PLAY_SAMPLE_FRACTION = 1.0  # Not used in dev mode
+        else:
+            print("🏆 PRODUCTION MODE - Using full dataset")
+            self.N_WEEKS = 18
+            self.N_FOLDS = 5
+            self.ITERATIONS = 15000
+            self.EPOCHS = 200
+            self.PATIENCE = 30
+            self.DEV_FRACTION = 1.0
+            self.PLAY_SAMPLE_FRACTION = 1.0  # Not used in production
+        
         self.SEED = 42
         
         # Model parameters
-        self.N_FOLDS = 5
-        self.ITERATIONS = 15000
         self.LEARNING_RATE = 0.08
         self.DEPTH = 8
         self.L2_REG = 3.0
@@ -70,8 +99,6 @@ class NFLConfig:
         self.DROPOUT = 0.3
         self.USE_ATTENTION = True
         self.BATCH_SIZE = 256
-        self.EPOCHS = 200
-        self.PATIENCE = 30
         
         # GPU detection
         self.USE_GPU = self._detect_gpu()
@@ -99,14 +126,38 @@ class DataLoader:
     def load_all_training_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Load all training data using multiprocessing"""
         print("Loading training data...")
-        with MP(min(cpu_count(), self.config.N_WEEKS)) as pool:
-            results = list(tqdm(
-                pool.imap(self.load_week_data, range(1, self.config.N_WEEKS + 1)), 
-                total=self.config.N_WEEKS
-            ))
+        # Use fewer processes to avoid memory issues
+        n_processes = min(2, cpu_count(), self.config.N_WEEKS)
+        with MP(n_processes) as pool:
+            results = list(pool.imap(self.load_week_data, range(1, self.config.N_WEEKS + 1)))
         
         train_input = pd.concat([r[0] for r in results], ignore_index=True)
         train_output = pd.concat([r[1] for r in results], ignore_index=True)
+        
+        # Apply mode-specific filtering
+        if self.config.TESTING_MODE:
+            print(f"🧪 TESTING MODE: Sampling {self.config.PLAY_SAMPLE_FRACTION*100:.1f}% of play IDs")
+            # Sample play IDs to ensure we get complete plays
+            unique_plays = train_input[['game_id', 'play_id']].drop_duplicates()
+            n_plays_to_sample = max(1, int(len(unique_plays) * self.config.PLAY_SAMPLE_FRACTION))
+            sampled_plays = unique_plays.sample(n=n_plays_to_sample, random_state=self.config.SEED)
+            
+            # Merge to get all frames for sampled plays
+            train_input = train_input.merge(sampled_plays, on=['game_id', 'play_id'], how='inner')
+            train_output = train_output.merge(sampled_plays, on=['game_id', 'play_id'], how='inner')
+            
+            print(f"Sampled {len(sampled_plays)} plays out of {len(unique_plays)} total plays")
+            
+        elif self.config.DEV_MODE:
+            print(f"🔬 DEV MODE: Filtering to {self.config.DEV_FRACTION*100:.1f}% of data")
+            # Sample games to ensure we get complete plays
+            unique_games = train_input['game_id'].unique()
+            sampled_games = np.random.choice(unique_games, 
+                                           size=int(len(unique_games) * self.config.DEV_FRACTION),
+                                           replace=False)
+            
+            train_input = train_input[train_input['game_id'].isin(sampled_games)].reset_index(drop=True)
+            train_output = train_output[train_output['game_id'].isin(sampled_games)].reset_index(drop=True)
         
         print(f"Train input:  {train_input.shape}")
         print(f"Train output: {train_output.shape}")
@@ -921,45 +972,118 @@ class NFLPredictor:
             pickle.dump(self.feature_columns, f)
         print("Models saved successfully")
 
-def main():
+def main(dev_mode: bool = False, testing_mode: bool = False, sample_fraction: float = 0.05):
     """Main training and prediction pipeline"""
     print("NFL Big Data Bowl 2026 - Complete Solution")
     print("=" * 50)
     
     # Initialize
-    config = NFLConfig()
+    config = NFLConfig(dev_mode=dev_mode, testing_mode=testing_mode, sample_fraction=sample_fraction)
     predictor = NFLPredictor(config)
     
-    # Load data
+    # Create overall progress tracker
+    total_steps = 6
+    current_step = 0
+    
+    def update_progress(step_name: str):
+        nonlocal current_step
+        current_step += 1
+        print(f"\n[{current_step}/{total_steps}] {step_name}")
+        print("-" * 40)
+    
+    # Step 1: Load data
+    update_progress("Loading training and test data")
     train_input, train_output = predictor.data_loader.load_all_training_data()
     test_input, test_template = predictor.data_loader.load_test_data()
     
-    # Prepare training data
+    # Step 2: Prepare training data
+    update_progress("Preparing training data with feature engineering")
     training_data = predictor.prepare_training_data(train_input, train_output)
     print(f"Training data shape: {training_data.shape}")
     
-    # Train CatBoost models
+    # Step 3: Train CatBoost models
+    update_progress("Training CatBoost models")
     catboost_scores = predictor.train_catboost_models(training_data)
     
-    # Train Neural Network models (optional)
-    try:
-        neural_scores = predictor.train_neural_networks(training_data)
-    except Exception as e:
-        print(f"Neural network training failed: {e}")
-        neural_scores = None
+    # Step 4: Train Neural Network models (optional)
+    update_progress("Training Neural Network models")
+    neural_scores = None
+    if not dev_mode and not testing_mode:  # Skip neural networks in dev and testing modes for speed
+        try:
+            neural_scores = predictor.train_neural_networks(training_data)
+        except Exception as e:
+            print(f"Neural network training failed: {e}")
+            neural_scores = None
+    else:
+        mode_name = "TESTING" if testing_mode else "DEV"
+        print(f"🔬 {mode_name} MODE: Skipping neural network training for speed")
     
-    # Make predictions
-    submission = predictor.predict(test_input, use_neural_networks=True)
+    # Step 5: Make predictions
+    update_progress("Making predictions on test data")
+    submission = predictor.predict(test_input, use_neural_networks=not (dev_mode or testing_mode))
     
-    # Save results
+    # Step 6: Save results
+    update_progress("Saving results and models")
     submission.to_csv(config.SAVE_DIR / 'submission.csv', index=False)
     print(f"Submission saved with {len(submission)} predictions")
     
     # Save models
     predictor.save_models()
     
-    print("\nPipeline completed successfully!")
+    print("\n" + "=" * 50)
+    print("🎉 PIPELINE COMPLETED SUCCESSFULLY!")
     print(f"CatBoost CV RMSE: {np.mean(catboost_scores):.5f} ± {np.std(catboost_scores):.5f}")
+    print("=" * 50)
+
+def test_dev_mode():
+    """Test function for dev mode"""
+    print("🧪 Running DEV MODE test...")
+    main(dev_mode=True)
+
+def test_testing_mode(sample_fraction: float = 0.05):
+    """Test function for testing mode"""
+    print(f"🧪 Running TESTING MODE test with {sample_fraction*100:.1f}% of data...")
+    main(dev_mode=False, testing_mode=True, sample_fraction=sample_fraction)
+
+def run_production():
+    """Run full production pipeline"""
+    print("🏆 Running PRODUCTION mode...")
+    main(dev_mode=False)
 
 if __name__ == "__main__":
-    main()
+    import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='NFL Big Data Bowl 2026 - Complete Solution')
+    parser.add_argument('--dev', action='store_true', help='Run in dev mode with subset of data (faster)')
+    parser.add_argument('--testing', action='store_true', help='Run in testing mode with sampled play IDs')
+    parser.add_argument('--sample-fraction', type=float, default=0.05, help='Fraction of play IDs to sample for testing (default: 0.05 = 5%%)')
+    parser.add_argument('--prod', action='store_true', help='Run in production mode with full dataset')
+    parser.add_argument('--nohup', action='store_true', help='Run with nohup for background execution')
+    
+    args = parser.parse_args()
+    
+    if args.nohup:
+        # Redirect output to files for nohup execution
+        import sys
+        sys.stdout = open('nfl_training.log', 'w')
+        sys.stderr = open('nfl_training_error.log', 'w')
+    
+    if args.testing:
+        test_testing_mode(args.sample_fraction)
+    elif args.dev:
+        test_dev_mode()
+    elif args.prod:
+        run_production()
+    else:
+        print("Usage: python nfl_complete_solution.py [--dev|--testing|--prod] [--sample-fraction FLOAT] [--nohup]")
+        print("  --dev              - Run in dev mode with subset of data (faster)")
+        print("  --testing          - Run in testing mode with sampled play IDs")
+        print("  --sample-fraction  - Fraction of play IDs to sample (default: 0.05 = 5%%)")
+        print("  --prod             - Run in production mode with full dataset")
+        print("  --nohup            - Run with nohup for background execution")
+        print("  no args            - Run in dev mode by default")
+        print("\nExamples:")
+        print("  python nfl_complete_solution.py --testing --sample-fraction 0.1")
+        print("  nohup python nfl_complete_solution.py --testing --nohup &")
+        test_dev_mode()
