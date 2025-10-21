@@ -84,15 +84,11 @@
 ## 🔬 Technical Implementation Details
 
 ### Recent updates (Oct 2025)
-- **FAST mode for Kaggle runtime**: 3-fold CV (vs 5), 10k iterations (vs 20k), early stop 300 (vs 700), smaller bins (128 vs 254)
-- **Optimized sequence computation**: Only last 5 frames per player processed for lags/rolling stats (massive speedup)
-- **Tightened GNN**: K_NEIGH=4, RADIUS=22.5 in FAST mode (vs 6 and 30.0 in full mode)
-- **Role-head training gates**: Configurable flags to enable/disable TR/DC head training for speed control
-- **CatBoost speed params**: rsm=0.8, subsample=0.8, Bernoulli bootstrap, use_best_model
-- **GPU alignment**: Auto-detection and CUDA_VISIBLE_DEVICES configuration for Kaggle multi-GPU
-- **Feature engineering parity**: Test-time pipeline matches training; missing columns filled safely
-- **Role-specific heads**: Targeted Receiver / Defensive Coverage blended with global predictions
-- **Kaggle submission notebook**: `prediction/final_submission.ipynb` (moved from SampleNotebooks)
+- Added device auto-detection for CatBoost (CPU/GPU, multi-GPU via `devices` like '0:1').
+- Ensured test-time feature engineering parity with training; missing engineered columns are filled safely.
+- Introduced role-specific heads (Targeted Receiver / Defensive Coverage) blended with global predictions.
+- Clarified and expanded GNN-lite neighbor embeddings (k=6, radius=30, ally/opponent weighting).
+- Added a Kaggle-style submission notebook: `SampleNotebooks/kaggle_submission_catboost_roleblend.ipynb`.
 
 ### Core Architecture
 ```python
@@ -108,11 +104,10 @@ class NFLPredictor:
 ### Feature Engineering Pipeline
 1. **Physics Features**: velocity components, acceleration, momentum, kinetic energy
 2. **Ball Geometry**: distance to ball, angle to ball, velocity alignment
-3. **Sequence Features**: 1-5 frame lags, 3-5 window rolling statistics (computed on last 5 frames only in FAST mode)
+3. **Sequence Features**: 1-5 frame lags, 3-5 window rolling statistics
 4. **Formation Features**: team centroids, relative positions, formation bearing
-5. **GNN Embeddings**: weighted neighbor interactions (4-6 neighbors, 22.5-30 yard radius depending on mode)
+5. **GNN Embeddings**: weighted neighbor interactions (6 neighbors, 30-yard radius)
 6. **Inference Parity**: identical pipeline applied at test-time; absent columns defaulted conservatively
-7. **Role Features**: Targeted Receiver, Defensive Coverage, Passer, Offense/Defense side indicators
 
 ### Neural Network Architecture
 ```python
@@ -177,30 +172,23 @@ class PlayerMovementGRU:
 
 ## 🎯 Next Steps
 
-### ✅ Completed
-1. ✅ CatBoost + Residual Learning pipeline with GPU support
-2. ✅ Comprehensive feature engineering (physics, sequence, formation, GNN)
-3. ✅ Role-specific heads (TR/DC) with blending
-4. ✅ FAST mode for Kaggle runtime optimization
-5. ✅ Feature engineering parity at test time
-6. ✅ Kaggle submission notebook ready
+### Immediate (Week 1-2)
+1. **Test current implementation** on sample data
+2. **Debug and optimize** CatBoost pipeline
+3. **Implement neural network training** with proper validation
+4. **Create ensemble** combining both approaches
 
-### Immediate (Active)
-1. **Kaggle GPU execution** - Test FAST mode performance on Kaggle hardware
-2. **Performance validation** - Compare FAST vs full mode accuracy trade-offs
-3. **Iterative tuning** - Adjust FAST mode parameters based on runtime/accuracy balance
+### Short-term (Week 3-4)
+1. **Role-specific modeling** for Targeted Receiver vs Defensive Coverage
+2. **Advanced feature engineering** (physics, contextual)
+3. **Hyperparameter optimization** using Bayesian methods
+4. **Advanced validation** strategies
 
-### Short-term (Next steps)
-1. **Neural network integration** - Add GRU/LSTM sequence models
-2. **Ensemble strategy** - Combine CatBoost + neural predictions
-3. **Advanced GNN** - Deeper neighbor embeddings with attention
-4. **Hyperparameter sweep** - Optimize depth, learning rate, GNN radius
-
-### Future enhancements
-1. **Transformer architecture** - Self-attention for player interactions
-2. **Data augmentation** - Synthetic play generation
-3. **Multi-task learning** - Joint prediction of related targets
-4. **Advanced physics** - Biomechanical constraints and realistic bounds
+### Long-term (Week 5-6)
+1. **Advanced neural architectures** (Transformers, advanced GNNs)
+2. **Data augmentation** techniques
+3. **Ensemble optimization** and stacking
+4. **Final tuning** and submission optimization
 
 ## 🏆 Success Metrics
 - **Primary**: RMSE improvement (lower is better)
@@ -209,37 +197,6 @@ class PlayerMovementGRU:
 
 ---
 
-## 🚀 Performance Optimization Summary
-
-### FAST Mode Configuration
-```python
-FAST_MODE = True
-HIST_FRAMES = 5        # Process only last 5 frames per player
-N_FOLDS = 3            # Down from 5 folds
-ITERATIONS = 10000     # Down from 20000
-EARLY = 300            # Down from 700
-BORDER_CT = 128        # Down from 254
-K_NEIGH = 4            # Down from 6
-RADIUS = 22.5          # Down from 30.0
-HEAD_TRAIN_TR = True   # Targeted Receiver head enabled
-HEAD_TRAIN_DC = False  # Defensive Coverage head disabled for speed
-```
-
-### Speed Improvements
-1. **70-80% reduction** in sequence feature computation (last 5 frames only)
-2. **40% fewer folds** (3 vs 5) reduces CV time proportionally
-3. **50% fewer iterations** (10k vs 20k) with tighter early stopping
-4. **Smaller bins** (128 vs 254) speeds up tree splits
-5. **Tighter GNN** (4 neighbors, 22.5 radius) reduces neighbor computation
-6. **Optional role heads** via flags allows selective training
-
-### Expected Runtime (Kaggle GPU)
-- **Training**: ~45-60 minutes (down from 2-3 hours)
-- **Inference**: ~5-10 minutes
-- **Total**: ~1 hour end-to-end (vs 3+ hours in full mode)
-
----
-
-**Status**: ✅ FAST Mode Implementation Complete  
-**Current**: Ready for Kaggle GPU execution  
-**Target**: Competitive performance in 0.6-0.69 RMSE range with <1hr runtime
+**Status**: ✅ Implementation Complete  
+**Next**: Testing and optimization phase  
+**Target**: Competitive performance in 0.6-0.69 RMSE range
