@@ -41,10 +41,39 @@ class NFLConfig:
     """Configuration class for NFL Big Data Bowl 2026"""
     
     def __init__(self, dev_mode: bool = False, testing_mode: bool = False, sample_fraction: float = 0.05):
-        # Paths
-        self.BASE_DIR = Path("/home/ubuntu/Big-Data-Bowl-26/prediction/data")
-        self.SAVE_DIR = Path("/home/ubuntu/Big-Data-Bowl-26/prediction/outputs")
-        self.SAVE_DIR.mkdir(exist_ok=True)
+        # Paths (auto-detect Kaggle vs local)
+        kaggle_input = Path("/kaggle/input/nfl-big-data-bowl-2026-prediction")
+        kaggle_work = Path("/kaggle/working")
+        repo_root = Path(__file__).resolve().parents[1]
+        local_pred_data = repo_root / "prediction" / "data"
+        alt_kaggle_mirror = repo_root / "kaggle" / "input" / "nfl-big-data-bowl-2026-prediction"
+
+        if kaggle_input.exists():
+            self.BASE_DIR = kaggle_input
+            self.SAVE_DIR = kaggle_work
+        elif local_pred_data.exists():
+            self.BASE_DIR = local_pred_data
+            self.SAVE_DIR = repo_root / "prediction" / "outputs"
+        elif alt_kaggle_mirror.exists():
+            self.BASE_DIR = alt_kaggle_mirror
+            self.SAVE_DIR = repo_root / "prediction" / "outputs"
+        else:
+            # Fallback to current working directory
+            self.BASE_DIR = Path.cwd()
+            self.SAVE_DIR = repo_root / "prediction" / "outputs"
+
+        self.SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Optional supplementary data (training-only)
+        self.SUPPLEMENTARY_PATH = None
+        possible_supp = [
+            repo_root / "analytics" / "data" / "supplementary_data.csv",
+            Path("/kaggle/input") / "supplementary_data.csv"
+        ]
+        for p in possible_supp:
+            if p.exists():
+                self.SUPPLEMENTARY_PATH = p
+                break
         
         # Mode settings
         self.DEV_MODE = dev_mode
@@ -168,6 +197,19 @@ class DataLoader:
         test_input = pd.read_csv(self.config.BASE_DIR / "test_input.csv")
         test_template = pd.read_csv(self.config.BASE_DIR / "test.csv")
         return test_input, test_template
+
+    def load_supplementary(self) -> pd.DataFrame:
+        """Load supplementary play-level context if available (training only)."""
+        if self.config.SUPPLEMENTARY_PATH is None:
+            return pd.DataFrame()
+        try:
+            df = pd.read_csv(self.config.SUPPLEMENTARY_PATH)
+            # Normalize column names (strip quotes if present)
+            df.columns = [str(c).strip().strip('"') for c in df.columns]
+            return df
+        except Exception as e:
+            print(f"Warning: failed to load supplementary data: {e}")
+            return pd.DataFrame()
 
 class FeatureEngineer:
     """Advanced feature engineering combining best practices"""
@@ -298,6 +340,66 @@ class FeatureEngineer:
         
         return df
 
+    @staticmethod
+    def merge_supplementary(last_frames: pd.DataFrame, supplementary_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge play-level supplementary context and encode numeric features.
+
+        This operates on the last pre-throw frame rows per player (one per player/play)
+        so the joined features are constant across that player's predicted frames.
+        """
+        if supplementary_df is None or supplementary_df.empty:
+            return last_frames
+
+        ctx = supplementary_df.copy()
+        # Select a concise subset of stable, useful fields
+        keep_cols = [
+            'game_id', 'play_id',
+            'down', 'yards_to_go', 'pass_length',
+            'offense_formation', 'team_coverage_type', 'team_coverage_man_zone',
+            'route_of_targeted_receiver', 'play_action', 'dropback_type'
+        ]
+        ctx = ctx[[c for c in keep_cols if c in ctx.columns]].copy()
+
+        # Numeric coercions
+        for num_col in ['down', 'yards_to_go', 'pass_length']:
+            if num_col in ctx.columns:
+                ctx[num_col] = pd.to_numeric(ctx[num_col], errors='coerce').fillna(0.0)
+
+        # Boolean flags
+        if 'play_action' in ctx.columns:
+            ctx['supp_play_action'] = ctx['play_action'].astype(str).str.upper().isin(['TRUE', 'T', '1', 'Y']).astype(float)
+            ctx.drop(columns=['play_action'], inplace=True)
+
+        # Lightweight label encodings (deterministic, no leakage)
+        def encode_cat(series: pd.Series) -> pd.Series:
+            return series.astype('category').cat.codes.astype('int32')
+
+        mapping = {
+            'offense_formation': 'supp_offense_formation_code',
+            'team_coverage_type': 'supp_coverage_type_code',
+            'team_coverage_man_zone': 'supp_coverage_mz_code',
+            'route_of_targeted_receiver': 'supp_route_code',
+            'dropback_type': 'supp_dropback_type_code'
+        }
+        for src, dst in mapping.items():
+            if src in ctx.columns:
+                ctx[dst] = encode_cat(ctx[src])
+                ctx.drop(columns=[src], inplace=True)
+
+        # Rename numeric
+        ctx.rename(columns={
+            'down': 'supp_down',
+            'yards_to_go': 'supp_yards_to_go',
+            'pass_length': 'supp_pass_length'
+        }, inplace=True)
+
+        merged = last_frames.merge(ctx, on=['game_id', 'play_id'], how='left')
+        # Fill NaNs introduced by merge with zeros
+        for c in merged.columns:
+            if c.startswith('supp_'):
+                merged[c] = merged[c].fillna(0.0)
+        return merged
+
 class GNNProcessor:
     """GNN-lite processor for player interaction embeddings"""
     
@@ -402,18 +504,53 @@ class PhysicsBaseline:
     """Physics baseline for residual learning"""
     
     @staticmethod
-    def constant_acceleration_baseline(x: np.ndarray, y: np.ndarray, 
-                                     vx: np.ndarray, vy: np.ndarray,
-                                     ax: np.ndarray, ay: np.ndarray,
-                                     dt: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def constant_acceleration_baseline(x: np.ndarray, y: np.ndarray,
+                                       vx: np.ndarray, vy: np.ndarray,
+                                       ax: np.ndarray, ay: np.ndarray,
+                                       dt: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Constant acceleration physics baseline"""
         pred_x = x + vx * dt + 0.5 * ax * (dt ** 2)
         pred_y = y + vy * dt + 0.5 * ay * (dt ** 2)
-        
+
         # Clip to field boundaries
         pred_x = np.clip(pred_x, 0.0, 120.0)
         pred_y = np.clip(pred_y, 0.0, 53.3)
-        
+
+        return pred_x, pred_y
+
+    @staticmethod
+    def steered_kinematics_baseline(x: np.ndarray, y: np.ndarray,
+                                    vx: np.ndarray, vy: np.ndarray,
+                                    ball_x: np.ndarray, ball_y: np.ndarray,
+                                    dt: np.ndarray,
+                                    v_max: float = 7.5,
+                                    a_max: float = 3.0,
+                                    turn_rate_max_deg: float = 120.0) -> Tuple[np.ndarray, np.ndarray]:
+        """Steer velocity toward ball landing location with speed/turn constraints.
+
+        Uses trapezoidal integration for position. All arrays are 1-D and aligned.
+        """
+        eps = 1e-6
+        speed = np.sqrt(vx**2 + vy**2)
+        cur_dir = np.where(speed > eps, np.arctan2(vy, vx), np.arctan2(ball_y - y, ball_x - x))
+        desired_dir = np.arctan2(ball_y - y, ball_x - x)
+
+        # Angle wrap to [-pi, pi]
+        ang_diff = (desired_dir - cur_dir + np.pi) % (2 * np.pi) - np.pi
+        max_turn = np.radians(turn_rate_max_deg) * dt
+        ang_step = np.clip(ang_diff, -max_turn, max_turn)
+        new_dir = cur_dir + ang_step
+
+        target_speed = np.minimum(v_max, speed + a_max * dt)
+        vx_new = target_speed * np.cos(new_dir)
+        vy_new = target_speed * np.sin(new_dir)
+
+        # Trapezoidal integration
+        pred_x = x + 0.5 * (vx + vx_new) * dt
+        pred_y = y + 0.5 * (vy + vy_new) * dt
+
+        pred_x = np.clip(pred_x, 0.0, 120.0)
+        pred_y = np.clip(pred_y, 0.0, 53.3)
         return pred_x, pred_y
 
 # Neural Network Components
@@ -668,6 +805,7 @@ class NFLPredictor:
         self.gnn_processor = GNNProcessor(config)
         self.physics_baseline = PhysicsBaseline()
         self.neural_trainer = NeuralNetworkTrainer(config)
+        self.supplementary_df = self.data_loader.load_supplementary()
         
         self.models_x = []
         self.models_y = []
@@ -699,6 +837,9 @@ class NFLPredictor:
         
         # Merge with GNN embeddings
         last_frames = last_frames.merge(gnn_embeddings, on=['game_id', 'play_id', 'nfl_id'], how='left')
+
+        # Merge supplementary context (training only)
+        last_frames = self.feature_engineer.merge_supplementary(last_frames, self.supplementary_df)
         
         # Prepare output data
         output_data = output_df.copy()
@@ -716,6 +857,9 @@ class NFLPredictor:
         # Calculate time delta
         training_data['delta_frames'] = (training_data['frame_id'] - training_data['last_frame_id']).clip(lower=0)
         training_data['delta_t'] = training_data['delta_frames'] / 10.0
+        # Hierarchical decoding helper features
+        training_data['waypoint_idx'] = (np.maximum(training_data['delta_frames'] - 1, 0) // 10).astype(int)
+        training_data['is_waypoint'] = (training_data['delta_frames'] % 10 == 0).astype(int)
         
         return training_data
     
@@ -732,7 +876,7 @@ class NFLPredictor:
             'role_targeted_receiver', 'role_defensive_coverage', 'role_passer', 'side_offense',
             'team_centroid_x', 'team_centroid_y', 'team_width', 'team_length',
             'rel_centroid_x', 'rel_centroid_y', 'formation_bearing_sin', 'formation_bearing_cos',
-            'delta_frames', 'delta_t', 'frame_id'
+            'delta_frames', 'delta_t', 'frame_id', 'waypoint_idx', 'is_waypoint'
         ]
         
         # Add GNN features
@@ -762,7 +906,10 @@ class NFLPredictor:
             'velocity_parallel_delta', 'velocity_perpendicular_delta'
         ]
         
-        all_features = base_features + gnn_features + lag_features + rolling_features + delta_features
+        # Supplementary features (if present)
+        supplementary_features = [c for c in df.columns if c.startswith('supp_')]
+
+        all_features = base_features + gnn_features + lag_features + rolling_features + delta_features + supplementary_features
         available_features = [col for col in all_features if col in df.columns]
         
         return available_features
@@ -780,14 +927,14 @@ class NFLPredictor:
         y_x = training_data['target_x'].values
         y_y = training_data['target_y'].values
         
-        # Physics baseline predictions
-        baseline_x, baseline_y = self.physics_baseline.constant_acceleration_baseline(
+        # Physics baseline predictions (steered kinematics)
+        baseline_x, baseline_y = self.physics_baseline.steered_kinematics_baseline(
             training_data['x'].values,
             training_data['y'].values,
             training_data['velocity_x'].values,
             training_data['velocity_y'].values,
-            training_data['acceleration_x'].values,
-            training_data['acceleration_y'].values,
+            training_data['ball_land_x'].values,
+            training_data['ball_land_y'].values,
             training_data['delta_t'].values
         )
         
@@ -911,6 +1058,9 @@ class NFLPredictor:
         
         # Merge with GNN embeddings
         last_frames = last_frames.merge(gnn_embeddings, on=['game_id', 'play_id', 'nfl_id'], how='left')
+
+        # Merge supplementary if available (likely empty for leaderboard weeks)
+        last_frames = self.feature_engineer.merge_supplementary(last_frames, self.supplementary_df)
         
         
         # Prepare test data
@@ -921,6 +1071,8 @@ class NFLPredictor:
         # Calculate time delta
         test_prepared['delta_frames'] = (test_prepared['frame_id'] - test_prepared['last_frame_id']).clip(lower=0)
         test_prepared['delta_t'] = test_prepared['delta_frames'] / 10.0
+        test_prepared['waypoint_idx'] = (np.maximum(test_prepared['delta_frames'] - 1, 0) // 10).astype(int)
+        test_prepared['is_waypoint'] = (test_prepared['delta_frames'] % 10 == 0).astype(int)
         
         # Prepare features - only use available columns
         available_features = [col for col in self.feature_columns if col in test_prepared.columns]
@@ -933,14 +1085,14 @@ class NFLPredictor:
         
         X_test = test_prepared[self.feature_columns].fillna(0).values
         
-        # Physics baseline
-        baseline_x, baseline_y = self.physics_baseline.constant_acceleration_baseline(
+        # Physics baseline (steered kinematics)
+        baseline_x, baseline_y = self.physics_baseline.steered_kinematics_baseline(
             test_prepared['x'].values,
             test_prepared['y'].values,
             test_prepared['velocity_x'].values,
             test_prepared['velocity_y'].values,
-            test_prepared['acceleration_x'].values,
-            test_prepared['acceleration_y'].values,
+            test_prepared['ball_land_x'].values,
+            test_prepared['ball_land_y'].values,
             test_prepared['delta_t'].values
         )
         
